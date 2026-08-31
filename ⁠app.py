@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
 
 st.set_page_config(page_title="UW Swing Trade & GEX Scanner", layout="wide")
 
@@ -49,20 +48,22 @@ if st.sidebar.button("Run Swing Scanner"):
             df_flow = fetch_flow_alerts()
             
         if not df_flow.empty:
-            # Calculate DTE dynamically if missing from API payload
-            if "dte" not in df_flow.columns and "expiry" in df_flow.columns:
-                df_flow["expiry_dt"] = pd.to_datetime(df_flow["expiry"])
+            # Parse target date and extract OSI option chain details safely
+            if "option_chain" in df_flow.columns and "dte" not in df_flow.columns:
+                df_flow["expiry_str"] = "20" + df_flow["option_chain"].str.extract(r'([0-9]{6})')[0]
+                df_flow["expiry_dt"] = pd.to_datetime(df_flow["expiry_str"], format="%Y%m%d", errors="coerce")
                 df_flow["dte"] = (df_flow["expiry_dt"] - pd.Timestamp.now()).dt.days
+
+            if "dte" not in df_flow.columns:
+                df_flow["dte"] = 0
+
+            swing_df = df_flow[df_flow["dte"] >= min_dte].copy()
             
-            # Ensure required columns exist before filtering
-            if "dte" in df_flow.columns:
-                swing_df = df_flow[df_flow["dte"] >= min_dte].copy()
-                
+            if not swing_df.empty:
                 st.write(f"### High-Conviction Flow Alerts (DTE ≥ {min_dte})")
-                display_cols = [c for c in ["ticker", "strike", "type", "expiry", "dte", "total_premium"] if c in swing_df.columns]
+                display_cols = [c for c in ["ticker", "option_chain", "dte", "total_premium", "total_size", "underlying_price"] if c in swing_df.columns]
                 st.dataframe(swing_df[display_cols], use_container_width=True)
                 
-                # GEX Analysis for Top Tickers
                 top_tickers = swing_df["ticker"].dropna().unique()[:4] if "ticker" in swing_df.columns else []
                 
                 if len(top_tickers) > 0:
@@ -82,6 +83,6 @@ if st.sidebar.button("Run Swing Scanner"):
                                 st.metric(label=f"{ticker} Net GEX", value=f"${net_gex:,.0f}")
                                 st.caption(f"**State:** {env}")
             else:
-                st.error("Returned API data missing expiration date fields.")
+                st.info(f"No flow alerts found with DTE ≥ {min_dte}.")
         else:
             st.info("No flow alerts matched your criteria.")
